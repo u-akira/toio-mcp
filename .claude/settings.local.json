@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "toio"
+  ],
+  "enableAllProjectMcpServers": true
+}
