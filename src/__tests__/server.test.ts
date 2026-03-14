@@ -24,6 +24,8 @@ import type { LlmProvider } from "../llm/types.js";
 
 const mockLlm: LlmProvider = {
   chat: vi.fn(),
+  addToolResults: vi.fn(),
+  clearHistory: vi.fn(),
 };
 
 let app: ReturnType<typeof createApp>;

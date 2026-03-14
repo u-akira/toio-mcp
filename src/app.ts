@@ -54,6 +54,11 @@ export function createApp(llm: LlmProvider): Hono {
       }
     }
 
+    // ツール実行結果を会話履歴に追加
+    llm.addToolResults(
+      results.map((r) => ({ name: r.tool, result: r.result })),
+    );
+
     return c.json({ type: "function_call", results });
   });
 
