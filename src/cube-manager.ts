@@ -3,6 +3,7 @@ import type { Cube } from "@toio/cube";
 
 class CubeManager {
   private cube: Cube | null = null;
+  private localName: string | null = null;
 
   async connect(): Promise<string> {
     if (this.cube) {
@@ -17,6 +18,11 @@ class CubeManager {
 
     await resolved.connect();
     this.cube = resolved;
+
+    // peripheral は private だが、BLE の Complete Local Name を取得する
+    const peripheral = (resolved as unknown as { peripheral: { advertisement?: { localName?: string } } }).peripheral;
+    this.localName = peripheral?.advertisement?.localName ?? null;
+
     return `cube に接続した。(id: ${resolved.id})`;
   }
 
@@ -27,6 +33,7 @@ class CubeManager {
 
     await this.cube.disconnect();
     this.cube = null;
+    this.localName = null;
     return "切断した。";
   }
 
@@ -39,6 +46,12 @@ class CubeManager {
 
   get isConnected(): boolean {
     return this.cube !== null;
+  }
+
+  /** 接続中の cube の情報を返す。未接続時は null */
+  getCubeInfo(): { localName: string | null; address: string } | null {
+    if (!this.cube) return null;
+    return { localName: this.localName, address: this.cube.address };
   }
 }
 

@@ -21,7 +21,11 @@ export function createApp(llm: LlmProvider): Hono {
 
   // ヘルスチェック
   app.get("/api/health", (c) => {
-    return c.json({ status: "ok", connected: cubeManager.isConnected });
+    return c.json({
+      status: "ok",
+      connected: cubeManager.isConnected,
+      cubeInfo: cubeManager.getCubeInfo(),
+    });
   });
 
   // 自然言語で制御

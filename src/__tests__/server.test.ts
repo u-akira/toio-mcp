@@ -13,6 +13,7 @@ vi.mock("../cube-manager.js", () => ({
     connect: vi.fn().mockResolvedValue("cube に接続した。(id: mock)"),
     disconnect: vi.fn().mockResolvedValue("切断した。"),
     getCube: vi.fn(() => mockCube),
+    getCubeInfo: vi.fn(() => null),
     get isConnected() {
       return false;
     },
@@ -40,7 +41,7 @@ describe("GET /api/health", () => {
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ status: "ok", connected: false });
+    expect(body).toEqual({ status: "ok", connected: false, cubeInfo: null });
   });
 });
 

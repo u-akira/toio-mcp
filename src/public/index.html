@@ -184,10 +184,15 @@
       }
     }
 
-    function updateStatus(isConnected) {
+    function updateStatus(isConnected, cubeInfo) {
       connected = isConnected;
       statusDot.classList.toggle("connected", connected);
-      statusText.textContent = connected ? "接続中" : "未接続";
+      if (connected && cubeInfo) {
+        const name = cubeInfo.localName ?? "unknown";
+        statusText.textContent = `接続中 — ${name} (${cubeInfo.address})`;
+      } else {
+        statusText.textContent = "未接続";
+      }
     }
 
     // ヘルスチェックでポーリング
@@ -195,9 +200,9 @@
       try {
         const res = await fetch("/api/health");
         const data = await safeJson(res);
-        updateStatus(data.connected);
+        updateStatus(data.connected, data.cubeInfo);
       } catch {
-        updateStatus(false);
+        updateStatus(false, null);
       }
     }
     setInterval(pollHealth, 3000);
