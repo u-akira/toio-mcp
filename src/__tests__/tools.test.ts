@@ -10,9 +10,13 @@ const mockCube = {
 
 vi.mock("../cube-manager.js", () => ({
   cubeManager: {
-    connect: vi.fn().mockResolvedValue("cube に接続した。(id: mock)"),
-    disconnect: vi.fn().mockResolvedValue("切断した。"),
+    connect: vi.fn().mockResolvedValue({
+      message: "cube に接続した。(id: mock)",
+      cubeInfo: { id: "mock", localName: null, address: "aa:bb" },
+    }),
+    disconnect: vi.fn().mockResolvedValue("切断した。(id: mock)"),
     getCube: vi.fn(() => mockCube),
+    getConnectedIds: vi.fn(() => ["mock"]),
     isConnected: true,
   },
 }));
@@ -66,7 +70,7 @@ describe("ツール実行", () => {
   it("disconnect → cubeManager.disconnect を呼ぶ", async () => {
     const tool = toolDefinitions.find((t) => t.name === "disconnect")!;
     const result = await tool.execute({});
-    expect(result).toBe("切断した。");
+    expect(result).toContain("切断した");
   });
 
   it("move → cube.move を正しい引数で呼ぶ", async () => {
@@ -82,7 +86,7 @@ describe("ツール実行", () => {
     const tool = toolDefinitions.find((t) => t.name === "stop")!;
     const result = await tool.execute({});
     expect(mockCube.stop).toHaveBeenCalledOnce();
-    expect(result).toBe("停止した。");
+    expect(result).toContain("停止した。");
   });
 
   it("spin → cube.move(speed, -speed, duration) を呼ぶ", async () => {

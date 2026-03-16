@@ -10,11 +10,19 @@ const mockCube = {
 
 vi.mock("../cube-manager.js", () => ({
   cubeManager: {
-    connect: vi.fn().mockResolvedValue("cube に接続した。(id: mock)"),
-    disconnect: vi.fn().mockResolvedValue("切断した。"),
+    connect: vi.fn().mockResolvedValue({
+      message: "cube に接続した。(id: mock)",
+      cubeInfo: { id: "mock", localName: "toio Core Cube-MOCK", address: "aa:bb" },
+    }),
+    disconnect: vi.fn().mockResolvedValue("切断した。(id: mock)"),
     getCube: vi.fn(() => mockCube),
-    getCubeInfo: vi.fn(() => null),
+    getConnectedIds: vi.fn(() => ["mock"]),
+    getAllCubeInfo: vi.fn(() => []),
+    cancelScan: vi.fn(() => "スキャンをキャンセルした。"),
     get isConnected() {
+      return false;
+    },
+    get isScanning() {
       return false;
     },
   },
@@ -41,7 +49,7 @@ describe("GET /api/health", () => {
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ status: "ok", connected: false, cubeInfo: null });
+    expect(body).toEqual({ status: "ok", connected: false, scanning: false, cubes: [] });
   });
 });
 
@@ -118,7 +126,7 @@ describe("POST /api/tools/:name", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.tool).toBe("stop");
-    expect(body.result).toBe("停止した。");
+    expect(body.result).toContain("停止した。");
   });
 
   it("存在しないツールは 404", async () => {

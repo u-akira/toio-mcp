@@ -16,46 +16,105 @@
     }
     h1 { font-size: 1.3rem; margin-bottom: 16px; }
 
-    /* 接続エリア */
-    .connection {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    /* 接続管理エリア */
+    .connection-area {
       margin-bottom: 16px;
       padding: 12px;
       background: #fff;
       border-radius: 8px;
       box-shadow: 0 1px 3px rgba(0,0,0,.1);
     }
-    .status-dot {
-      width: 12px; height: 12px;
+    .connection-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .connection-header h2 { font-size: 1rem; }
+    .cube-list { list-style: none; }
+    .cube-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: .9rem;
+    }
+    .cube-item .dot {
+      width: 10px; height: 10px;
       border-radius: 50%;
-      background: #ccc;
+      background: #4caf50;
       flex-shrink: 0;
     }
-    .status-dot.connected { background: #4caf50; }
-    .status-text { font-size: .9rem; flex: 1; }
-    .connection button {
-      padding: 6px 14px;
+    .cube-item .cube-name { flex: 1; }
+    .cube-item button {
+      padding: 3px 10px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: .8rem;
+      color: #fff;
+      background: #757575;
+    }
+    .cube-item button:hover { background: #616161; }
+    .cube-empty {
+      color: #999;
+      font-size: .85rem;
+      padding: 4px 0;
+    }
+    #btn-connect {
+      padding: 5px 12px;
       border: none;
       border-radius: 6px;
       cursor: pointer;
       font-size: .85rem;
       color: #fff;
+      background: #2196f3;
     }
-    #btn-connect { background: #2196f3; }
     #btn-connect:hover { background: #1976d2; }
-    #btn-disconnect { background: #757575; }
-    #btn-disconnect:hover { background: #616161; }
-    .connection button:disabled {
-      opacity: .5;
-      cursor: not-allowed;
+    #btn-connect:disabled { opacity: .5; cursor: not-allowed; }
+    #btn-cancel-scan {
+      display: none;
+      padding: 5px 12px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: .85rem;
+      color: #fff;
+      background: #f44336;
+    }
+    #btn-cancel-scan:hover { background: #d32f2f; }
+    #btn-cancel-scan.visible { display: inline-block; }
+
+    /* タブ */
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 0;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab {
+      padding: 8px 16px;
+      font-size: .85rem;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: #757575;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      white-space: nowrap;
+    }
+    .tab:hover { color: #333; }
+    .tab.active {
+      color: #2196f3;
+      border-bottom-color: #2196f3;
+      font-weight: 600;
     }
 
     /* チャットエリア */
     .chat-input {
       display: flex;
       gap: 8px;
+      margin-top: 12px;
       margin-bottom: 16px;
     }
     .chat-input input {
@@ -108,6 +167,14 @@
       font-size: .75rem;
       margin-right: 6px;
     }
+    .log-entry .target-badge {
+      font-size: .7rem;
+      color: #fff;
+      background: #90a4ae;
+      border-radius: 3px;
+      padding: 1px 5px;
+      margin-left: 4px;
+    }
     .log-empty {
       color: #999;
       text-align: center;
@@ -118,15 +185,22 @@
 <body>
   <h1>toio WebAPI テスト</h1>
 
-  <!-- 接続エリア -->
-  <div class="connection">
-    <div class="status-dot" id="status-dot"></div>
-    <span class="status-text" id="status-text">未接続</span>
-    <button id="btn-connect">接続</button>
-    <button id="btn-disconnect">切断</button>
+  <!-- 接続管理 -->
+  <div class="connection-area">
+    <div class="connection-header">
+      <h2>接続管理</h2>
+      <button id="btn-cancel-scan">キャンセル</button>
+      <button id="btn-connect">+ 接続追加</button>
+    </div>
+    <ul class="cube-list" id="cube-list">
+      <li class="cube-empty">接続中の cube はありません</li>
+    </ul>
   </div>
 
-  <!-- チャットエリア -->
+  <!-- 送信先タブ + チャット -->
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-cube-id="all">すべて</button>
+  </div>
   <div class="chat-input">
     <input type="text" id="msg-input" placeholder="toio への指示を入力…" />
     <button id="btn-send">送信</button>
@@ -138,34 +212,20 @@
   </div>
 
   <script>
-    const statusDot = document.getElementById("status-dot");
-    const statusText = document.getElementById("status-text");
+    const cubeListEl = document.getElementById("cube-list");
+    const tabsEl = document.getElementById("tabs");
     const btnConnect = document.getElementById("btn-connect");
-    const btnDisconnect = document.getElementById("btn-disconnect");
+    const btnCancelScan = document.getElementById("btn-cancel-scan");
     const msgInput = document.getElementById("msg-input");
     const btnSend = document.getElementById("btn-send");
     const logEl = document.getElementById("log");
 
-    let connected = false;
+    let cubes = [];          // [{ id, localName, address }]
+    let activeTab = "all";   // 選択中の送信先
     let logEmpty = true;
 
     function now() {
       return new Date().toLocaleTimeString("ja-JP", { hour12: false });
-    }
-
-    function appendLog(role, text) {
-      if (logEmpty) {
-        logEl.innerHTML = "";
-        logEmpty = false;
-      }
-      const entry = document.createElement("div");
-      entry.className = "log-entry";
-      entry.innerHTML =
-        `<span class="time">${now()}</span>` +
-        `<span class="role ${role}">${role === "user" ? "You" : role === "error" ? "Error" : "toio"}:</span>` +
-        `<span>${escapeHtml(text)}</span>`;
-      logEl.appendChild(entry);
-      logEl.scrollTop = logEl.scrollHeight;
     }
 
     function escapeHtml(s) {
@@ -174,7 +234,33 @@
       return d.innerHTML;
     }
 
-    /** レスポンスを安全に JSON パースする。非 JSON の場合はエラーオブジェクトを返す */
+    function shortName(cube) {
+      if (cube.localName) {
+        // "toio Core Cube-XXXX" → "Cube-XXXX"
+        const m = cube.localName.match(/Cube-\w+$/);
+        return m ? m[0] : cube.localName;
+      }
+      return cube.id.slice(0, 8);
+    }
+
+    function appendLog(role, text, targetLabel) {
+      if (logEmpty) {
+        logEl.innerHTML = "";
+        logEmpty = false;
+      }
+      const entry = document.createElement("div");
+      entry.className = "log-entry";
+      const badge = targetLabel
+        ? `<span class="target-badge">${escapeHtml(targetLabel)}</span>`
+        : "";
+      entry.innerHTML =
+        `<span class="time">${now()}</span>` +
+        `<span class="role ${role}">${role === "user" ? "You" : role === "error" ? "Error" : "toio"}:</span>` +
+        `<span>${escapeHtml(text)}</span>${badge}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
     async function safeJson(res) {
       const text = await res.text();
       try {
@@ -184,34 +270,71 @@
       }
     }
 
-    function updateStatus(isConnected, cubeInfo) {
-      connected = isConnected;
-      statusDot.classList.toggle("connected", connected);
-      if (connected && cubeInfo) {
-        const name = cubeInfo.localName ?? "unknown";
-        statusText.textContent = `接続中 — ${name} (${cubeInfo.address})`;
-      } else {
-        statusText.textContent = "未接続";
+    // --- cube リスト描画 ---
+    function renderCubeList() {
+      if (cubes.length === 0) {
+        cubeListEl.innerHTML = '<li class="cube-empty">接続中の cube はありません</li>';
+        return;
+      }
+      cubeListEl.innerHTML = cubes
+        .map(
+          (c) =>
+            `<li class="cube-item">
+              <span class="dot"></span>
+              <span class="cube-name">${escapeHtml(c.localName ?? c.id)} (${escapeHtml(c.address)})</span>
+              <button onclick="disconnectCube('${c.id}')">切断</button>
+            </li>`,
+        )
+        .join("");
+    }
+
+    // --- タブ描画 ---
+    function renderTabs() {
+      // 「すべて」タブは常に存在
+      let html = `<button class="tab${activeTab === "all" ? " active" : ""}" data-cube-id="all">すべて</button>`;
+      for (const c of cubes) {
+        const name = shortName(c);
+        const isActive = activeTab === c.id;
+        html += `<button class="tab${isActive ? " active" : ""}" data-cube-id="${c.id}">${escapeHtml(name)}</button>`;
+      }
+      tabsEl.innerHTML = html;
+
+      // activeTab が消えた cube を指している場合は「すべて」に戻す
+      if (activeTab !== "all" && !cubes.find((c) => c.id === activeTab)) {
+        activeTab = "all";
+        renderTabs();
       }
     }
 
-    // ヘルスチェックでポーリング
+    tabsEl.addEventListener("click", (e) => {
+      const tab = e.target.closest(".tab");
+      if (!tab) return;
+      activeTab = tab.dataset.cubeId;
+      renderTabs();
+    });
+
+    // --- ヘルスチェック ---
     async function pollHealth() {
       try {
         const res = await fetch("/api/health");
         const data = await safeJson(res);
-        updateStatus(data.connected, data.cubeInfo);
+        cubes = data.cubes ?? [];
+        renderCubeList();
+        renderTabs();
       } catch {
-        updateStatus(false, null);
+        cubes = [];
+        renderCubeList();
+        renderTabs();
       }
     }
     setInterval(pollHealth, 3000);
     pollHealth();
 
-    // 接続
+    // --- 接続 ---
     btnConnect.addEventListener("click", async () => {
       btnConnect.disabled = true;
-      appendLog("system", "接続中…");
+      btnCancelScan.classList.add("visible");
+      appendLog("system", "スキャン中…");
       try {
         const res = await fetch("/api/tools/connect", { method: "POST" });
         const data = await safeJson(res);
@@ -225,14 +348,31 @@
         appendLog("error", e.message);
       } finally {
         btnConnect.disabled = false;
+        btnCancelScan.classList.remove("visible");
       }
     });
 
-    // 切断
-    btnDisconnect.addEventListener("click", async () => {
-      btnDisconnect.disabled = true;
+    // --- スキャンキャンセル ---
+    btnCancelScan.addEventListener("click", async () => {
       try {
-        const res = await fetch("/api/tools/disconnect", { method: "POST" });
+        await fetch("/api/scan/cancel", { method: "POST" });
+        // ログは connect 側のレスポンスで表示されるため、ここでは出さない
+      } catch {
+        // connect 側で処理される
+      } finally {
+        btnConnect.disabled = false;
+        btnCancelScan.classList.remove("visible");
+      }
+    });
+
+    // --- 切断 ---
+    window.disconnectCube = async function (cubeId) {
+      try {
+        const res = await fetch("/api/tools/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cubeId }),
+        });
         const data = await safeJson(res);
         if (data.error) {
           appendLog("error", data.error);
@@ -242,25 +382,30 @@
         await pollHealth();
       } catch (e) {
         appendLog("error", e.message);
-      } finally {
-        btnDisconnect.disabled = false;
       }
-    });
+    };
 
-    // チャット送信
+    // --- チャット送信 ---
+    function getTargetLabel() {
+      if (activeTab === "all") return cubes.length > 1 ? "すべて" : null;
+      const c = cubes.find((c) => c.id === activeTab);
+      return c ? shortName(c) : null;
+    }
+
     async function sendMessage() {
       const text = msgInput.value.trim();
       if (!text) return;
 
-      appendLog("user", text);
+      appendLog("user", text, getTargetLabel());
       msgInput.value = "";
       btnSend.disabled = true;
 
       try {
+        const payload = { message: text, cubeId: activeTab };
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text }),
+          body: JSON.stringify(payload),
         });
         const data = await safeJson(res);
 
