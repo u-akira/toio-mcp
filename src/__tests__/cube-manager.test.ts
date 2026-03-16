@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockCube = {
   id: "test-cube-001",
+  address: "aa:bb:cc:dd",
   connect: vi.fn(),
   disconnect: vi.fn(),
 };
@@ -29,24 +30,33 @@ describe("CubeManager", () => {
   describe("connect", () => {
     it("cube に接続してメッセージを返す", async () => {
       const result = await cubeManager.connect();
-      expect(result).toContain("cube に接続した");
-      expect(result).toContain("test-cube-001");
+      expect(result.message).toContain("cube に接続した");
+      expect(result.message).toContain("test-cube-001");
+      expect(result.cubeInfo.id).toBe("test-cube-001");
       expect(mockCube.connect).toHaveBeenCalledOnce();
     });
 
     it("既に接続済みの場合はそのメッセージを返す", async () => {
       await cubeManager.connect();
       const result = await cubeManager.connect();
-      expect(result).toBe("既に接続済みである。");
+      expect(result.message).toContain("既に接続済みである");
       expect(mockCube.connect).toHaveBeenCalledOnce();
     });
   });
 
   describe("disconnect", () => {
-    it("接続中の cube を切断する", async () => {
+    it("指定 ID の cube を切断する", async () => {
+      await cubeManager.connect();
+      const result = await cubeManager.disconnect("test-cube-001");
+      expect(result).toContain("切断した");
+      expect(mockCube.disconnect).toHaveBeenCalledOnce();
+    });
+
+    it("ID 省略時は全切断する", async () => {
       await cubeManager.connect();
       const result = await cubeManager.disconnect();
-      expect(result).toBe("切断した。");
+      expect(result).toContain("全");
+      expect(result).toContain("切断した");
       expect(mockCube.disconnect).toHaveBeenCalledOnce();
     });
 
@@ -59,13 +69,13 @@ describe("CubeManager", () => {
   describe("getCube", () => {
     it("接続中の cube を返す", async () => {
       await cubeManager.connect();
-      const cube = cubeManager.getCube();
+      const cube = cubeManager.getCube("test-cube-001");
       expect(cube).toBe(mockCube);
     });
 
-    it("未接続の場合はエラーを投げる", () => {
-      expect(() => cubeManager.getCube()).toThrowError(
-        "cube が接続されていない。先に connect を実行すること。",
+    it("未接続の ID を指定するとエラーを投げる", () => {
+      expect(() => cubeManager.getCube("unknown")).toThrowError(
+        "cube が接続されていない",
       );
     });
   });

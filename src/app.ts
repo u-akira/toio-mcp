@@ -7,6 +7,7 @@ import type { LlmProvider } from "./llm/types.js";
 
 const chatSchema = z.object({
   message: z.string().min(1),
+  cubeId: z.string().optional(),
 });
 
 /** LLM プロバイダを受け取って Hono アプリを構築する */
@@ -24,8 +25,15 @@ export function createApp(llm: LlmProvider): Hono {
     return c.json({
       status: "ok",
       connected: cubeManager.isConnected,
-      cubeInfo: cubeManager.getCubeInfo(),
+      scanning: cubeManager.isScanning,
+      cubes: cubeManager.getAllCubeInfo(),
     });
+  });
+
+  // スキャンキャンセル
+  app.post("/api/scan/cancel", (c) => {
+    const result = cubeManager.cancelScan();
+    return c.json({ result });
   });
 
   // 自然言語で制御
@@ -36,7 +44,19 @@ export function createApp(llm: LlmProvider): Hono {
       return c.json({ error: "message フィールドが必要である。" }, 400);
     }
 
-    const llmResponse = await llm.chat(parsed.data.message, toolDefinitions);
+    // 送信先情報を LLM への指示に付与する
+    const { message, cubeId } = parsed.data;
+    let augmented = message;
+    if (cubeId && cubeId !== "all") {
+      augmented = `[対象 cube: ${cubeId}] ${message}`;
+    } else {
+      const ids = cubeManager.getConnectedIds();
+      if (ids.length > 1) {
+        augmented = `[対象: 全 cube (${ids.join(", ")})] ${message}`;
+      }
+    }
+
+    const llmResponse = await llm.chat(augmented, toolDefinitions);
 
     if (llmResponse.type === "text") {
       return c.json({ type: "text", result: llmResponse.text });
@@ -48,6 +68,10 @@ export function createApp(llm: LlmProvider): Hono {
       if (!tool) {
         results.push({ tool: fc.name, result: `不明なツール: ${fc.name}` });
         continue;
+      }
+      // LLM が cubeId を指定しなかった場合、リクエストの cubeId を使う
+      if (fc.arguments.cubeId === undefined && cubeId) {
+        fc.arguments.cubeId = cubeId;
       }
       try {
         const result = await tool.execute(fc.arguments);
