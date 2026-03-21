@@ -84,6 +84,31 @@ describe("createLlmProvider", () => {
     );
   });
 
+  it("LLM_PROVIDER=ollama で OpenAIProvider を生成する（API キー不要）", async () => {
+    process.env.LLM_PROVIDER = "ollama";
+    delete process.env.OPENAI_API_KEY;
+    const { createLlmProvider } = await loadFactory();
+    createLlmProvider();
+    expect(OpenAIProvider).toHaveBeenCalledWith(
+      "ollama",
+      "qwen2.5",
+      "http://localhost:11434/v1/",
+    );
+  });
+
+  it("LLM_PROVIDER=ollama でカスタム設定を渡せる", async () => {
+    process.env.LLM_PROVIDER = "ollama";
+    process.env.LLM_MODEL = "llama3";
+    process.env.OLLAMA_BASE_URL = "http://192.168.1.100:11434/v1/";
+    const { createLlmProvider } = await loadFactory();
+    createLlmProvider();
+    expect(OpenAIProvider).toHaveBeenCalledWith(
+      "ollama",
+      "llama3",
+      "http://192.168.1.100:11434/v1/",
+    );
+  });
+
   it("不明なプロバイダはエラー", async () => {
     process.env.LLM_PROVIDER = "gemini";
     const { createLlmProvider } = await loadFactory();
