@@ -28,8 +28,8 @@ beforeEach(() => {
 });
 
 describe("toolDefinitions", () => {
-  it("8 個のツールが定義されている", () => {
-    expect(toolDefinitions).toHaveLength(8);
+  it("9 個のツールが定義されている", () => {
+    expect(toolDefinitions).toHaveLength(9);
   });
 
   it("全ツールに name, description, schema, execute がある", () => {
@@ -125,5 +125,100 @@ describe("ツール実行", () => {
     const result = await tool.execute({});
     expect(mockCube.getBatteryStatus).toHaveBeenCalledOnce();
     expect(result).toContain("75%");
+  });
+});
+
+describe("run_sequence", () => {
+  const getTool = () => toolDefinitions.find((t) => t.name === "run_sequence")!;
+
+  it("複数コマンドを順番に実行する", async () => {
+    const tool = getTool();
+    const result = await tool.execute({
+      commands: [
+        { tool: "move", args: { left: 50, right: 50, duration: 0 } },
+        { tool: "spin", args: { speed: 30, duration: 0 } },
+      ],
+    });
+    expect(mockCube.move).toHaveBeenCalledTimes(2);
+    expect(mockCube.move).toHaveBeenNthCalledWith(1, 50, 50, 0);
+    expect(mockCube.move).toHaveBeenNthCalledWith(2, 30, -30, 0);
+    expect(result).toContain("[1] move:");
+    expect(result).toContain("[2] spin:");
+  });
+
+  it("禁止ツール（connect, disconnect, run_sequence）はスキップする", async () => {
+    const tool = getTool();
+    const result = await tool.execute({
+      commands: [
+        { tool: "connect", args: {} },
+        { tool: "disconnect", args: {} },
+        { tool: "run_sequence", args: {} },
+        { tool: "stop", args: {} },
+      ],
+    });
+    expect(result).toContain("[1] スキップ");
+    expect(result).toContain("[2] スキップ");
+    expect(result).toContain("[3] スキップ");
+    expect(result).toContain("[4] stop:");
+    expect(mockCube.stop).toHaveBeenCalledOnce();
+  });
+
+  it("不明なツール名はエラーを返す", async () => {
+    const tool = getTool();
+    const result = await tool.execute({
+      commands: [{ tool: "unknown_tool", args: {} }],
+    });
+    expect(result).toContain('不明なツール "unknown_tool"');
+  });
+
+  it("エラー発生時はそこで中断する", async () => {
+    mockCube.move.mockImplementationOnce(() => {
+      throw new Error("BLE エラー");
+    });
+    const tool = getTool();
+    const result = await tool.execute({
+      cubeId: "mock",
+      commands: [
+        { tool: "move", args: { left: 50, right: 50, duration: 0 } },
+        { tool: "stop", args: {} },
+      ],
+    });
+    expect(result).toContain("BLE エラー");
+    expect(mockCube.stop).not.toHaveBeenCalled();
+  });
+
+  it("cubeId が各コマンドに自動付与される", async () => {
+    const { cubeManager } = await import("../cube-manager.js");
+    const tool = getTool();
+    await tool.execute({
+      cubeId: "mock",
+      commands: [{ tool: "stop", args: {} }],
+    });
+    expect(cubeManager.getCube).toHaveBeenCalledWith("mock");
+  });
+
+  it("duration 分待ってから次のコマンドを実行する", async () => {
+    vi.useFakeTimers();
+    const tool = getTool();
+    const promise = tool.execute({
+      commands: [
+        { tool: "move", args: { left: 10, right: 10, duration: 200 } },
+        { tool: "stop", args: {} },
+      ],
+    });
+
+    // move は即実行されるが、stop はまだ
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mockCube.move).toHaveBeenCalledOnce();
+    expect(mockCube.stop).not.toHaveBeenCalled();
+
+    // 200ms 経過後に stop が実行される
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await promise;
+    expect(mockCube.stop).toHaveBeenCalledOnce();
+    expect(result).toContain("[1] move:");
+    expect(result).toContain("[2] stop:");
+
+    vi.useRealTimers();
   });
 });

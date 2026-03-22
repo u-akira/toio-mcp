@@ -181,6 +181,67 @@ export const toolDefinitions: ToolDefinition[] = [
         return `バッテリー残量: ${battery.level}%`;
       }),
   },
+
+  // --- シーケンス実行 ---
+  {
+    name: "run_sequence",
+    description:
+      '複数のコマンドを順番に実行する。各コマンドの duration 分だけ待ってから次を実行する。例: [{"tool":"move","args":{"left":50,"right":50,"duration":1000}},{"tool":"spin","args":{"speed":50,"duration":500}}]',
+    schema: {
+      cubeId: cubeIdSchema,
+      commands: z
+        .array(
+          z.object({
+            tool: z
+              .string()
+              .describe("実行するツール名（move, spin, stop, set_led, play_preset_sound）"),
+            args: z
+              .record(z.unknown())
+              .default({})
+              .describe("ツールに渡す引数（cubeId は自動付与されるため不要）"),
+          }),
+        )
+        .min(1)
+        .describe("順番に実行するコマンドの配列"),
+    },
+    execute: async (args) => {
+      const commands = args.commands as { tool: string; args: Record<string, unknown> }[];
+      const cubeId = args.cubeId as string | undefined;
+      const disallowed = new Set(["run_sequence", "connect", "disconnect"]);
+      const results: string[] = [];
+
+      for (let i = 0; i < commands.length; i++) {
+        const cmd = commands[i];
+        if (disallowed.has(cmd.tool)) {
+          results.push(`[${i + 1}] スキップ: ${cmd.tool} はシーケンス内で実行できない`);
+          continue;
+        }
+
+        const toolDef = toolDefinitions.find((t) => t.name === cmd.tool);
+        if (!toolDef) {
+          results.push(`[${i + 1}] エラー: 不明なツール "${cmd.tool}"`);
+          continue;
+        }
+
+        const mergedArgs = { ...cmd.args, cubeId };
+        try {
+          const result = await toolDef.execute(mergedArgs);
+          results.push(`[${i + 1}] ${cmd.tool}: ${result}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          results.push(`[${i + 1}] ${cmd.tool} エラー: ${msg}`);
+          break;
+        }
+
+        const duration = cmd.args.duration as number | undefined;
+        if (duration && duration > 0 && i < commands.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, duration));
+        }
+      }
+
+      return results.join("\n");
+    },
+  },
 ];
 
 /** ツール定義の Zod スキーマを JSON Schema に変換する */
