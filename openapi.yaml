@@ -1,0 +1,416 @@
+openapi: 3.0.3
+info:
+  title: toio-mcp WebAPI
+  description: 自然言語または直接ツール呼び出しで toio ロボットキューブを制御する WebAPI サーバー。LLM（Claude / OpenAI）を介した自然言語制御と、LLM を介さない直接制御の両方に対応する。
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3000
+    description: ローカル開発サーバー
+
+tags:
+  - name: health
+    description: サーバー状態確認
+  - name: chat
+    description: 自然言語による toio 制御
+  - name: tools
+    description: LLM を介さない直接ツール呼び出し
+  - name: scan
+    description: BLE スキャン管理
+
+paths:
+  /api/health:
+    get:
+      tags:
+        - health
+      summary: ヘルスチェック
+      description: サーバーの状態と cube の接続状況を返す。
+      responses:
+        "200":
+          description: サーバー正常稼働中
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                connected: true
+                scanning: false
+                cubes:
+                  - id: "cube-1"
+                    connected: true
+
+  /api/scan/cancel:
+    post:
+      tags:
+        - scan
+      summary: BLE スキャンをキャンセルする
+      description: 実行中の BLE スキャンを中断する。
+      responses:
+        "200":
+          description: キャンセル結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: boolean
+                    description: キャンセルに成功した場合 true
+              example:
+                result: true
+
+  /api/chat:
+    post:
+      tags:
+        - chat
+      summary: 自然言語で toio を制御する
+      description: |
+        自然言語のメッセージを LLM が解釈し、適切な toio ツールを呼び出して実行する。
+        LLM はメッセージの内容に応じて move, spin, set_led などのツールを選択する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            examples:
+              forward:
+                summary: 前進指示
+                value:
+                  message: 前に進んで
+              spin_with_cube:
+                summary: 特定の cube に回転指示
+                value:
+                  message: その場でくるくる回って
+                  cubeId: cube-1
+              all_cubes:
+                summary: 全台に指示
+                value:
+                  message: 全台で一緒に前に進んで
+                  cubeId: all
+      responses:
+        "200":
+          description: LLM による実行結果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+              examples:
+                text_response:
+                  summary: テキスト応答
+                  value:
+                    type: text
+                    result: 前に進みます。
+                tool_response:
+                  summary: ツール実行結果
+                  value:
+                    type: function_call
+                    results:
+                      - tool: move
+                        result: "移動: left=50, right=50, duration=1000ms"
+        "400":
+          description: リクエストボディが不正（message フィールドなし等）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: message フィールドが必要である。
+        "500":
+          description: サーバー内部エラー
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/tools/{name}:
+    post:
+      tags:
+        - tools
+      summary: ツールを直接呼び出す
+      description: |
+        LLM を介さず、指定したツールを直接実行する。
+        利用可能なツール名: connect, disconnect, move, stop, spin, set_led, play_preset_sound, get_battery, run_sequence
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: 実行するツール名
+          schema:
+            type: string
+            enum:
+              - connect
+              - disconnect
+              - move
+              - stop
+              - spin
+              - set_led
+              - play_preset_sound
+              - get_battery
+              - run_sequence
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolRequest"
+            examples:
+              connect:
+                summary: BLE 接続
+                value: {}
+              move:
+                summary: 移動
+                value:
+                  left: 50
+                  right: 50
+                  duration: 1000
+              move_with_cube:
+                summary: 特定の cube を移動
+                value:
+                  cubeId: cube-1
+                  left: 50
+                  right: 50
+                  duration: 1000
+              stop:
+                summary: 停止
+                value: {}
+              spin:
+                summary: 回転
+                value:
+                  speed: 50
+                  duration: 1000
+              set_led:
+                summary: LED を赤に設定
+                value:
+                  r: 255
+                  g: 0
+                  b: 0
+                  duration: 2000
+              play_preset_sound:
+                summary: 効果音再生
+                value:
+                  soundId: 1
+              get_battery:
+                summary: バッテリー残量取得
+                value: {}
+              run_sequence:
+                summary: シーケンス実行
+                value:
+                  commands:
+                    - tool: move
+                      args:
+                        left: 50
+                        right: 50
+                        duration: 1000
+                    - tool: spin
+                      args:
+                        speed: 50
+                        duration: 500
+      responses:
+        "200":
+          description: ツールの実行結果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolResponse"
+              example:
+                tool: move
+                result: "移動: left=50, right=50, duration=1000ms"
+        "404":
+          description: 指定されたツールが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "不明なツール: unknown_tool"
+        "500":
+          description: ツール実行エラー
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: cube が接続されていない。先に connect を実行すること。
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - connected
+        - scanning
+        - cubes
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+          description: サーバー状態
+        connected:
+          type: boolean
+          description: 1 台以上の cube が接続されている場合 true
+        scanning:
+          type: boolean
+          description: BLE スキャン中の場合 true
+        cubes:
+          type: array
+          description: 接続済み cube の情報一覧
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: cube の識別子
+              connected:
+                type: boolean
+                description: 接続状態
+
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: toio への自然言語指示
+          example: 前に進んで
+        cubeId:
+          type: string
+          description: |
+            対象の cube ID。"all" を指定すると全台に指示する。
+            省略時は接続台数に応じて自動判定する。
+          example: cube-1
+
+    ChatResponse:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum:
+            - text
+            - function_call
+          description: 応答の種類
+        result:
+          type: string
+          description: LLM のテキスト応答（type が "text" の場合）
+        results:
+          type: array
+          description: ツール実行結果の一覧（type が "function_call" の場合）
+          items:
+            type: object
+            required:
+              - tool
+              - result
+            properties:
+              tool:
+                type: string
+                description: 実行されたツール名
+              result:
+                type: string
+                description: ツールの実行結果メッセージ
+
+    ToolRequest:
+      type: object
+      description: |
+        各ツールに応じた引数を指定する。
+        `cubeId` は共通オプション引数（"all" で全台、省略時も全台）。
+        ツール別の引数は以下を参照。
+      properties:
+        cubeId:
+          type: string
+          description: 対象の cube ID。"all" で全台、省略時も全台。
+          example: cube-1
+        left:
+          type: number
+          minimum: -115
+          maximum: 115
+          description: "[move] 左モーター速度"
+        right:
+          type: number
+          minimum: -115
+          maximum: 115
+          description: "[move] 右モーター速度"
+        speed:
+          type: number
+          minimum: -115
+          maximum: 115
+          description: "[spin] 回転速度。正値で時計回り、負値で反時計回り"
+        duration:
+          type: number
+          minimum: 0
+          maximum: 10000
+          description: "[move / spin / set_led] 持続時間（ミリ秒）"
+        r:
+          type: number
+          minimum: 0
+          maximum: 255
+          description: "[set_led] 赤成分 (0-255)"
+        g:
+          type: number
+          minimum: 0
+          maximum: 255
+          description: "[set_led] 緑成分 (0-255)"
+        b:
+          type: number
+          minimum: 0
+          maximum: 255
+          description: "[set_led] 青成分 (0-255)"
+        soundId:
+          type: number
+          minimum: 0
+          maximum: 10
+          description: |
+            [play_preset_sound] 効果音 ID
+            0=Enter, 1=Selected, 2=Cancel, 3=Cursor,
+            4=Mat in, 5=Mat out, 6=Get 1, 7=Get 2,
+            8=Get 3, 9=Effect 1, 10=Effect 2
+        commands:
+          type: array
+          description: "[run_sequence] 順番に実行するコマンドの配列"
+          minItems: 1
+          items:
+            type: object
+            required:
+              - tool
+            properties:
+              tool:
+                type: string
+                description: "実行するツール名（move, spin, stop, set_led, play_preset_sound）"
+                enum:
+                  - move
+                  - spin
+                  - stop
+                  - set_led
+                  - play_preset_sound
+              args:
+                type: object
+                description: ツールに渡す引数（cubeId は自動付与されるため不要）
+                additionalProperties: true
+
+    ToolResponse:
+      type: object
+      required:
+        - tool
+        - result
+      properties:
+        tool:
+          type: string
+          description: 実行されたツール名
+        result:
+          type: string
+          description: ツールの実行結果メッセージ
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: エラーメッセージ
