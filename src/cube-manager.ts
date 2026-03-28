@@ -1,8 +1,18 @@
 import { createRequire } from "node:module";
-import { NearestScanner } from "@toio/scanner";
 import { Cube } from "@toio/cube";
 
 const require = createRequire(import.meta.url);
+
+/** スキャンウィンドウ: この期間中に発見された未接続 peripheral から最寄りを選ぶ */
+const SCAN_WINDOW_MS = 1000;
+
+interface Peripheral {
+  id: string;
+  address: string;
+  rssi: number;
+  advertisement?: { localName?: string };
+  state?: string;
+}
 
 interface Noble {
   state: string;
@@ -11,6 +21,8 @@ interface Noble {
   removeAllListeners: (event: string) => void;
   listenerCount: (event: string) => number;
   emit: (event: string, ...args: unknown[]) => void;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener: (event: string, listener: (...args: unknown[]) => void) => void;
 }
 
 function log(message: string, data?: Record<string, unknown>): void {
@@ -28,8 +40,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+let _nobleOverride: Noble | null | undefined;
+
+/** テスト用: noble インスタンスを差し替える */
+export function _setNobleForTest(noble: Noble | null): void {
+  _nobleOverride = noble;
+}
+
 /** noble を動的に取得する（テスト環境ではネイティブモジュールが無い場合がある） */
 function getNoble(): Noble | null {
+  if (_nobleOverride !== undefined) return _nobleOverride;
   try {
     // overrides で noble → @abandonware/noble に差し替えているため、
     // require 先は "noble" である
@@ -60,116 +80,150 @@ const SCAN_CANCELLED = Symbol("SCAN_CANCELLED");
 class CubeManager {
   private cubes: Map<string, { cube: Cube; localName: string | null }> =
     new Map();
-  private activeScanner: NearestScanner | null = null;
+  private scanning = false;
   private cancelResolve: ((value: typeof SCAN_CANCELLED) => void) | null = null;
 
   /** スキャン中かどうか */
   get isScanning(): boolean {
-    return this.activeScanner !== null;
+    return this.scanning;
   }
 
   /** 最寄りの未接続 cube を1台追加する */
   async connect(): Promise<{ message: string; cubeInfo: CubeInfo }> {
-    if (this.activeScanner) {
+    if (this.scanning) {
       log("前回のスキャンが残っている。キャンセルする");
       this.cancelScan();
     }
 
+    const connectedIds = new Set(this.cubes.keys());
     log("スキャン開始", { connectedCubes: this.getConnectedIds() });
 
-    const scanner = new NearestScanner();
-    this.activeScanner = scanner;
+    this.scanning = true;
 
-    // キャンセル用 Promise を作成し、scanner.start() と race させる
+    // キャンセル用 Promise
     const cancelPromise = new Promise<typeof SCAN_CANCELLED>((resolve) => {
       this.cancelResolve = resolve;
     });
 
     this.cleanupNoble();
 
-    // scanner.start() は stateChange イベント経由で startScanning を呼ぶが、
-    // 2回目以降は既に poweredOn のため発火しない。
-    // scanner がリスナーを登録した後に、allowDuplicates=true で手動スキャンを開始する。
-    // allowDuplicates=true がないと切断済みデバイスが再発見されない。
-    const scanStartPromise = scanner.start();
     const noble = getNoble();
-    if (noble) {
-      log("noble 状態", {
-        state: noble.state,
-        discoverListeners: noble.listenerCount("discover"),
-        stateChangeListeners: noble.listenerCount("stateChange"),
-      });
-      if (noble.state === "poweredOn") {
-        log("手動で startScanning 呼び出し (allowDuplicates=true)");
-        noble.startScanning([Cube.TOIO_SERVICE_ID], true);
-      }
-    } else {
-      log("noble が取得できなかった");
+    if (!noble) {
+      this.scanning = false;
+      this.cancelResolve = null;
+      throw new Error("noble が取得できなかった。BLE が利用できない環境である。");
     }
 
-    let result: Cube | Cube[] | typeof SCAN_CANCELLED;
+    // スキャンウィンドウ中に未接続 peripheral を収集し、最も RSSI が高いものを選ぶ
+    const discoveryPromise = new Promise<Peripheral>((resolve, reject) => {
+      let bestPeripheral: Peripheral | null = null;
+
+      const onDiscover = (peripheral: Peripheral) => {
+        // 既接続の cube はスキップする
+        if (connectedIds.has(peripheral.id)) {
+          log("既接続の cube をスキップ", { id: peripheral.id });
+          return;
+        }
+        // peripheral.state が "connected" の場合もスキップする
+        if (peripheral.state === "connected") {
+          log("state=connected の peripheral をスキップ", { id: peripheral.id });
+          return;
+        }
+        log("未接続の cube を発見", {
+          id: peripheral.id,
+          rssi: peripheral.rssi,
+          currentBest: bestPeripheral?.id ?? null,
+          currentBestRssi: bestPeripheral?.rssi ?? null,
+        });
+        if (!bestPeripheral || peripheral.rssi > bestPeripheral.rssi) {
+          bestPeripheral = peripheral;
+        }
+      };
+
+      noble.on("discover", onDiscover as (...args: unknown[]) => void);
+
+      // スキャンウィンドウ後に結果を返す
+      setTimeout(() => {
+        noble.removeListener("discover", onDiscover as (...args: unknown[]) => void);
+        noble.stopScanning();
+        if (bestPeripheral) {
+          resolve(bestPeripheral);
+        } else {
+          reject(new Error("近くに未接続の cube が見つからなかった。"));
+        }
+      }, SCAN_WINDOW_MS);
+    });
+
+    // スキャン開始
+    log("noble 状態", {
+      state: noble.state,
+      discoverListeners: noble.listenerCount("discover"),
+      stateChangeListeners: noble.listenerCount("stateChange"),
+    });
+
+    if (noble.state === "poweredOn") {
+      log("startScanning 呼び出し (allowDuplicates=true)");
+      noble.startScanning([Cube.TOIO_SERVICE_ID], true);
+    } else {
+      const onStateChange = (state: string) => {
+        if (state === "poweredOn") {
+          noble.removeListener("stateChange", onStateChange as (...args: unknown[]) => void);
+          log("stateChange → poweredOn, startScanning 呼び出し");
+          noble.startScanning([Cube.TOIO_SERVICE_ID], true);
+        }
+      };
+      noble.on("stateChange", onStateChange as (...args: unknown[]) => void);
+    }
+
+    let peripheral: Peripheral | typeof SCAN_CANCELLED;
     try {
-      result = await Promise.race([scanStartPromise, cancelPromise]);
+      peripheral = await Promise.race([discoveryPromise, cancelPromise]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log("スキャン中にエラー", { error: msg });
-      this.activeScanner = null;
+      this.scanning = false;
       this.cancelResolve = null;
       throw e;
     }
-    this.activeScanner = null;
+    this.scanning = false;
     this.cancelResolve = null;
 
-    if (result === SCAN_CANCELLED) {
+    if (peripheral === SCAN_CANCELLED) {
       log("スキャンがキャンセルされた");
       return { message: "スキャンをキャンセルした。", cubeInfo: null as unknown as CubeInfo };
     }
 
-    const resolved = Array.isArray(result) ? result[0] : result;
-    if (!resolved) {
-      log("cube が見つからなかった");
-      throw new Error("cube が見つからなかった。");
-    }
+    log("最寄りの未接続 cube を選択", { id: peripheral.id, address: peripheral.address, rssi: peripheral.rssi });
 
-    log("cube を発見", { id: resolved.id, address: resolved.address });
+    // Cube インスタンスを生成して接続する
+    const cube = new Cube(peripheral as never);
 
-    // 既に接続済みの cube は弾く
-    if (this.cubes.has(resolved.id)) {
-      log("既に接続済み", { id: resolved.id });
-      return {
-        message: `既に接続済みである。(id: ${resolved.id})`,
-        cubeInfo: this.buildCubeInfo(resolved.id)!,
-      };
-    }
+    log("BLE 接続中…", { id: cube.id });
+    await cube.connect();
 
-    log("BLE 接続中…", { id: resolved.id });
-    await resolved.connect();
+    const localName = peripheral.advertisement?.localName ?? null;
 
-    const peripheral = (
-      resolved as unknown as {
-        peripheral: { advertisement?: { localName?: string } };
-      }
-    ).peripheral;
-    const localName = peripheral?.advertisement?.localName ?? null;
+    this.cubes.set(cube.id, { cube, localName });
 
-    this.cubes.set(resolved.id, { cube: resolved, localName });
-
-    log("接続完了", { id: resolved.id, localName, address: resolved.address });
+    log("接続完了", { id: cube.id, localName, address: cube.address });
     return {
-      message: `cube に接続した。(id: ${resolved.id})`,
-      cubeInfo: { id: resolved.id, localName, address: resolved.address },
+      message: `cube に接続した。(id: ${cube.id})`,
+      cubeInfo: { id: cube.id, localName, address: cube.address },
     };
   }
 
   /** 進行中のスキャンをキャンセルする */
   cancelScan(): string {
-    if (!this.activeScanner) {
+    if (!this.scanning) {
       log("cancelScan: スキャン中ではない");
       return "スキャン中ではない。";
     }
     log("cancelScan: スキャンを停止する");
-    this.activeScanner.stop();
-    this.activeScanner = null;
+    const noble = getNoble();
+    if (noble) {
+      noble.stopScanning();
+    }
+    this.scanning = false;
     if (this.cancelResolve) {
       this.cancelResolve(SCAN_CANCELLED);
       this.cancelResolve = null;
@@ -270,7 +324,7 @@ class CubeManager {
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        log("healthCheck: 通信失敗", { id, error: msg });
+        log("healthCheck: 通信失敗。接続管理から削除する", { id, error: msg });
         results.push({
           id,
           localName: entry.localName,
@@ -278,8 +332,10 @@ class CubeManager {
           battery: null,
           error: msg,
         });
+        this.cubes.delete(id);
       }
     }
+    if (this.cubes.size === 0) this.cleanupNoble();
     return results;
   }
 
@@ -294,7 +350,9 @@ class CubeManager {
       return { id: cubeId, localName: entry.localName, healthy: true, battery: battery.level };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log("healthCheckSingle: 通信失敗", { id: cubeId, error: msg });
+      log("healthCheckSingle: 通信失敗。接続管理から削除する", { id: cubeId, error: msg });
+      this.cubes.delete(cubeId);
+      if (this.cubes.size === 0) this.cleanupNoble();
       return { id: cubeId, localName: entry.localName, healthy: false, battery: null, error: msg };
     }
   }
