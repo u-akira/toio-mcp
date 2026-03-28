@@ -31,7 +31,7 @@
       margin-bottom: 8px;
     }
     .connection-header h2 { font-size: 1rem; }
-    .cube-list { list-style: none; }
+    .cube-list { list-style: none; max-height: 200px; overflow-y: auto; }
     .cube-item {
       display: flex;
       align-items: center;
@@ -72,6 +72,9 @@
     }
     #btn-connect:hover { background: #1976d2; }
     #btn-connect:disabled { opacity: .5; cursor: not-allowed; }
+    .cube-item .btn-health { background: #4caf50; }
+    .cube-item .btn-health:hover { background: #388e3c; }
+    .cube-item .btn-health:disabled { opacity: .5; cursor: not-allowed; }
     #btn-cancel-scan {
       display: none;
       padding: 5px 12px;
@@ -180,6 +183,41 @@
       text-align: center;
       padding: 24px 0;
     }
+
+    /* 最新結果エリア */
+    .latest-result {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.1);
+      padding: 12px;
+      margin-bottom: 8px;
+      min-height: 54px;
+    }
+    .latest-label {
+      font-size: .72rem;
+      color: #bbb;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .latest-empty { color: #bbb; font-size: .9rem; padding: 6px 0; }
+    .latest-content { font-size: .95rem; line-height: 1.5; }
+
+    /* ログトグルボタン */
+    .log-toggle {
+      width: 100%;
+      text-align: left;
+      padding: 7px 12px;
+      background: #f0f0f0;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: .82rem;
+      color: #666;
+      margin-bottom: 4px;
+    }
+    .log-toggle:hover:not(:disabled) { background: #e8e8e8; }
+    .log-toggle:disabled { opacity: .5; cursor: default; }
   </style>
 </head>
 <body>
@@ -206,10 +244,15 @@
     <button id="btn-send">送信</button>
   </div>
 
-  <!-- レスポンスログ -->
-  <div class="log" id="log">
-    <div class="log-empty">ログはまだありません</div>
+  <!-- 最新結果 -->
+  <div class="latest-result" id="latest-result">
+    <div class="latest-label">最新の結果</div>
+    <div class="latest-empty">まだ結果がありません</div>
   </div>
+
+  <!-- 過去のログ（折りたたみ） -->
+  <button class="log-toggle" id="log-toggle" disabled>過去のログ (0件) ▶</button>
+  <div class="log" id="log" hidden></div>
 
   <script>
     const cubeListEl = document.getElementById("cube-list");
@@ -219,10 +262,13 @@
     const msgInput = document.getElementById("msg-input");
     const btnSend = document.getElementById("btn-send");
     const logEl = document.getElementById("log");
+    const latestResultEl = document.getElementById("latest-result");
+    const logToggleBtn = document.getElementById("log-toggle");
 
     let cubes = [];          // [{ id, localName, address }]
     let activeTab = "all";   // 選択中の送信先
-    let logEmpty = true;
+    let logCount = 0;
+    let healthResults = {};  // { [cubeId]: { healthy, battery } }
 
     function now() {
       return new Date().toLocaleTimeString("ja-JP", { hour12: false });
@@ -244,22 +290,38 @@
     }
 
     function appendLog(role, text, targetLabel) {
-      if (logEmpty) {
-        logEl.innerHTML = "";
-        logEmpty = false;
-      }
-      const entry = document.createElement("div");
-      entry.className = "log-entry";
       const badge = targetLabel
         ? `<span class="target-badge">${escapeHtml(targetLabel)}</span>`
         : "";
-      entry.innerHTML =
+      const roleLabel = role === "user" ? "You" : role === "error" ? "Error" : "toio";
+      const entryHtml =
         `<span class="time">${now()}</span>` +
-        `<span class="role ${role}">${role === "user" ? "You" : role === "error" ? "Error" : "toio"}:</span>` +
+        `<span class="role ${role}">${roleLabel}:</span>` +
         `<span>${escapeHtml(text)}</span>${badge}`;
+
+      // 最新結果を更新
+      latestResultEl.innerHTML =
+        `<div class="latest-label">最新の結果</div>` +
+        `<div class="latest-content log-entry" style="border:none;padding:0">${entryHtml}</div>`;
+
+      // 過去ログに追記
+      const entry = document.createElement("div");
+      entry.className = "log-entry";
+      entry.innerHTML = entryHtml;
       logEl.appendChild(entry);
       logEl.scrollTop = logEl.scrollHeight;
+
+      // トグルボタン更新
+      logCount++;
+      const open = !logEl.hidden;
+      logToggleBtn.disabled = false;
+      logToggleBtn.textContent = `過去のログ (${logCount}件) ${open ? "▲" : "▶"}`;
     }
+
+    logToggleBtn.addEventListener("click", () => {
+      logEl.hidden = !logEl.hidden;
+      logToggleBtn.textContent = `過去のログ (${logCount}件) ${logEl.hidden ? "▶" : "▲"}`;
+    });
 
     async function safeJson(res) {
       const text = await res.text();
@@ -278,12 +340,17 @@
       }
       cubeListEl.innerHTML = cubes
         .map(
-          (c) =>
-            `<li class="cube-item">
-              <span class="dot"></span>
-              <span class="cube-name">${escapeHtml(c.localName ?? c.id)} (${escapeHtml(c.address)})</span>
+          (c) => {
+            const hr = healthResults[c.id];
+            const dotColor = hr ? (hr.healthy ? "#4caf50" : "#f44336") : "#4caf50";
+            const batteryText = hr && hr.battery != null ? ` [${hr.battery}%]` : "";
+            return `<li class="cube-item" id="cube-item-${c.id}">
+              <span class="dot" style="background:${dotColor}"></span>
+              <span class="cube-name">${escapeHtml(c.localName ?? c.id)} (${escapeHtml(c.address)})${batteryText}</span>
+              <button class="btn-health" id="health-btn-${c.id}" onclick="checkCubeHealth('${c.id}')">ヘルスチェック</button>
               <button onclick="disconnectCube('${c.id}')">切断</button>
-            </li>`,
+            </li>`;
+          },
         )
         .join("");
     }
@@ -318,6 +385,11 @@
       try {
         const res = await fetch("/api/health");
         const data = await safeJson(res);
+        const newIds = (data.cubes ?? []).map(c => c.id);
+        const oldIds = cubes.map(c => c.id);
+        if (newIds.length !== oldIds.length || newIds.some((id, i) => id !== oldIds[i])) {
+          healthResults = {};
+        }
         cubes = data.cubes ?? [];
         renderCubeList();
         renderTabs();
@@ -364,6 +436,52 @@
         btnCancelScan.classList.remove("visible");
       }
     });
+
+    // --- per-cube ヘルスチェック ---
+    window.checkCubeHealth = async function(cubeId) {
+      const btn = document.getElementById(`health-btn-${cubeId}`);
+      if (!btn) return;
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = "確認中…";
+      try {
+        const res = await fetch(`/api/health/check?cubeId=${encodeURIComponent(cubeId)}`);
+        const data = await safeJson(res);
+        if (data.error) { appendLog("error", data.error); return; }
+        const r = data.results[0];
+        if (!r) { appendLog("error", "ヘルスチェック結果が取得できなかった。"); return; }
+        const name = r.localName ?? r.id;
+        if (r.healthy) {
+          appendLog("system", `${name}: 正常 (バッテリー ${r.battery}%)`);
+          fetch("/api/tools/play_preset_sound", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cubeId, soundId: 0 }),
+          }).catch(() => {});
+        } else {
+          appendLog("error", `${name}: 応答なし (${r.error ?? "不明"})`);
+        }
+        healthResults[r.id] = { healthy: r.healthy, battery: r.battery };
+        const item = document.getElementById(`cube-item-${cubeId}`);
+        if (item) {
+          const dot = item.querySelector(".dot");
+          const nameSpan = item.querySelector(".cube-name");
+          if (dot) dot.style.background = r.healthy ? "#4caf50" : "#f44336";
+          if (nameSpan) {
+            const cube = cubes.find(c => c.id === cubeId);
+            if (cube) {
+              const batteryText = r.battery != null ? ` [${r.battery}%]` : "";
+              nameSpan.textContent = `${cube.localName ?? cube.id} (${cube.address})${batteryText}`;
+            }
+          }
+        }
+      } catch (e) {
+        appendLog("error", e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    };
 
     // --- 切断 ---
     window.disconnectCube = async function (cubeId) {

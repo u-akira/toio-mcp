@@ -53,6 +53,7 @@ toio-mcp/src/
 | `set_led` | `r`, `g`, `b` (0-255), `duration?` (ms) | LED 色変更 |
 | `play_preset_sound` | `soundId` (0-10) | 内蔵効果音を再生 |
 | `get_battery` | なし | バッテリー残量を取得 |
+| `get_position` | `cubeId?`, `timeoutMs?` (100-5000, default 3000) | マット上の位置座標(x, y)と角度を取得 |
 
 ## Windows セットアップ
 

@@ -6,6 +6,8 @@ const mockCube = {
   turnOnLight: vi.fn(),
   playPresetSound: vi.fn(),
   getBatteryStatus: vi.fn().mockResolvedValue({ level: 75 }),
+  on: vi.fn(),
+  off: vi.fn(),
 };
 
 vi.mock("../cube-manager.js", () => ({
@@ -28,8 +30,8 @@ beforeEach(() => {
 });
 
 describe("toolDefinitions", () => {
-  it("9 個のツールが定義されている", () => {
-    expect(toolDefinitions).toHaveLength(9);
+  it("10 個のツールが定義されている", () => {
+    expect(toolDefinitions).toHaveLength(10);
   });
 
   it("全ツールに name, description, schema, execute がある", () => {
@@ -125,6 +127,32 @@ describe("ツール実行", () => {
     const result = await tool.execute({});
     expect(mockCube.getBatteryStatus).toHaveBeenCalledOnce();
     expect(result).toContain("75%");
+  });
+
+  it("get_position → マット上の位置情報を返す", async () => {
+    mockCube.on.mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === "id:position-id") {
+        setTimeout(() => listener({ x: 100, y: 200, angle: 45, sensorX: 0, sensorY: 0 }), 10);
+      }
+    });
+    const tool = toolDefinitions.find((t) => t.name === "get_position")!;
+    const result = await tool.execute({ timeoutMs: 1000 });
+    expect(result).toContain("x=100");
+    expect(result).toContain("y=200");
+    expect(result).toContain("角度=45");
+    expect(mockCube.on).toHaveBeenCalledWith("id:position-id", expect.any(Function));
+    expect(mockCube.off).toHaveBeenCalled();
+  });
+
+  it("get_position → マット外ではエラーメッセージを返す", async () => {
+    mockCube.on.mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === "id:position-id-missed") {
+        setTimeout(() => listener(), 10);
+      }
+    });
+    const tool = toolDefinitions.find((t) => t.name === "get_position")!;
+    const result = await tool.execute({ timeoutMs: 1000 });
+    expect(result).toContain("マット上にない");
   });
 });
 

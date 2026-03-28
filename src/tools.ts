@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import type { PositionIdInfo } from "@toio/cube";
 import { cubeManager } from "./cube-manager.js";
 
 export interface ToolDefinition {
@@ -179,6 +180,51 @@ export const toolDefinitions: ToolDefinition[] = [
         const cube = cubeManager.getCube(id);
         const battery = await cube.getBatteryStatus();
         return `バッテリー残量: ${battery.level}%`;
+      }),
+  },
+
+  {
+    name: "get_position",
+    description:
+      "cube の位置情報（x, y 座標と角度）を取得する。専用プレイマット上に置かれている必要がある。",
+    schema: {
+      cubeId: cubeIdSchema,
+      timeoutMs: z.coerce
+        .number()
+        .min(100)
+        .max(5000)
+        .default(3000)
+        .describe("位置情報の受信待機時間（ミリ秒、デフォルト 3000）"),
+    },
+    execute: async (args) =>
+      forCubes(args.cubeId, async (id) => {
+        const cube = cubeManager.getCube(id);
+        const timeout = (args.timeoutMs as number) ?? 3000;
+        return new Promise<string>((resolve, reject) => {
+          const onPosition = (info: PositionIdInfo) => {
+            cleanup();
+            resolve(`位置: x=${info.x}, y=${info.y}, 角度=${info.angle}°`);
+          };
+          const onMissed = () => {
+            cleanup();
+            reject(new Error("cube がマット上にない。"));
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(
+              new Error(
+                `${timeout}ms 以内に位置情報を受信できなかった。マット上に置かれているか確認すること。`,
+              ),
+            );
+          }, timeout);
+          function cleanup() {
+            clearTimeout(timer);
+            cube.off("id:position-id", onPosition);
+            cube.off("id:position-id-missed", onMissed);
+          }
+          cube.on("id:position-id", onPosition);
+          cube.on("id:position-id-missed", onMissed);
+        });
       }),
   },
 

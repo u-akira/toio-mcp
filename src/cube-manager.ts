@@ -19,6 +19,15 @@ function log(message: string, data?: Record<string, unknown>): void {
   console.log(`[${ts}] [cube-manager] ${message}${extra}`);
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`タイムアウト (${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
 /** noble を動的に取得する（テスト環境ではネイティブモジュールが無い場合がある） */
 function getNoble(): Noble | null {
   try {
@@ -35,6 +44,14 @@ export interface CubeInfo {
   id: string;
   localName: string | null;
   address: string;
+}
+
+export interface HealthCheckResult {
+  id: string;
+  localName: string | null;
+  healthy: boolean;
+  battery: number | null;
+  error?: string;
 }
 
 /** キャンセルを示すセンチネル値 */
@@ -237,6 +254,49 @@ class CubeManager {
       localName: entry.localName,
       address: entry.cube.address,
     }));
+  }
+
+  /** 各接続済み cube に BLE 通信して生存確認する */
+  async healthCheck(): Promise<HealthCheckResult[]> {
+    const results: HealthCheckResult[] = [];
+    for (const [id, entry] of this.cubes) {
+      try {
+        const battery = await withTimeout(entry.cube.getBatteryStatus(), 5000);
+        results.push({
+          id,
+          localName: entry.localName,
+          healthy: true,
+          battery: battery.level,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log("healthCheck: 通信失敗", { id, error: msg });
+        results.push({
+          id,
+          localName: entry.localName,
+          healthy: false,
+          battery: null,
+          error: msg,
+        });
+      }
+    }
+    return results;
+  }
+
+  /** 指定した cube 1 台だけ BLE 通信して生存確認する */
+  async healthCheckSingle(cubeId: string): Promise<HealthCheckResult> {
+    const entry = this.cubes.get(cubeId);
+    if (!entry) {
+      throw new Error(`id=${cubeId} の cube が接続されていない。`);
+    }
+    try {
+      const battery = await withTimeout(entry.cube.getBatteryStatus(), 5000);
+      return { id: cubeId, localName: entry.localName, healthy: true, battery: battery.level };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("healthCheckSingle: 通信失敗", { id: cubeId, error: msg });
+      return { id: cubeId, localName: entry.localName, healthy: false, battery: null, error: msg };
+    }
   }
 
   private buildCubeInfo(id: string): CubeInfo | null {

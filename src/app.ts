@@ -30,6 +30,17 @@ export function createApp(llm: LlmProvider): Hono {
     });
   });
 
+  // アクティブヘルスチェック（BLE 通信で生存確認）
+  app.get("/api/health/check", async (c) => {
+    const cubeId = c.req.query("cubeId");
+    if (cubeId) {
+      const result = await cubeManager.healthCheckSingle(cubeId);
+      return c.json({ results: [result] });
+    }
+    const results = await cubeManager.healthCheck();
+    return c.json({ results });
+  });
+
   // スキャンキャンセル
   app.post("/api/scan/cancel", (c) => {
     const result = cubeManager.cancelScan();
